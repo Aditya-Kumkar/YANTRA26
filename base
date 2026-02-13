@@ -1,0 +1,217 @@
+import numpy as np
+
+# =================================================
+# MATERIAL DATABASE
+# =================================================
+
+MATERIALS = {
+    "Aluminum": {"E": 69e9, "yield": 275e6, "density": 2700},
+    "Titanium": {"E": 110e9, "yield": 880e6, "density": 4430},
+    "Composite": {"E": 140e9, "yield": 600e6, "density": 1600}
+}
+
+# =================================================
+# SECTION PROPERTIES
+# =================================================
+
+def rectangular_section(t, h):
+    I = (t * h**3) / 12
+    area = t * h
+    return I, area
+
+
+def ibeam_section(h, tw, tf, bf):
+
+    if 2 * tf >= h:
+        return None, None
+
+    web_height = h - 2 * tf
+
+    I_web = (tw * web_height**3) / 12
+    I_flange = 2 * (
+        (bf * tf**3) / 12 +
+        bf * tf * ((h/2 - tf/2)**2)
+    )
+
+    I = I_web + I_flange
+    area = (tw * web_height) + 2 * (bf * tf)
+
+    return I, area
+
+# =================================================
+# BEAM PHYSICS
+# =================================================
+
+def beam_response(
+    I,
+    area,
+    h,
+    F,
+    L,
+    E,
+    rho,
+    allowable_stress,
+    max_deflection,
+    beam_type="Cantilever",
+    axial_load=0
+):
+    """
+    Returns structural response dictionary.
+    axial_load is optional and used only for Euler buckling.
+    """
+
+    if I is None:
+        return None
+
+    # ----- Bending response -----
+
+    if beam_type == "Cantilever":
+        M = F * L
+        deflection = (F * L**3) / (3 * E * I)
+        K = 2
+
+    elif beam_type == "Simply Supported":
+        M = F * L / 4
+        deflection = (F * L**3) / (48 * E * I)
+        K = 1
+
+    else:  # Fixed-Fixed
+        M = F * L / 8
+        deflection = (F * L**3) / (192 * E * I)
+        K = 0.5
+
+    c = h / 2
+    stress = (M * c) / I
+
+    # ----- Mass -----
+    volume = area * L
+    mass = rho * volume
+
+    # ----- Ratios -----
+    stress_ratio = stress / allowable_stress
+    defl_ratio = deflection / max_deflection
+
+    # ----- Euler Buckling (Only if axial load exists) -----
+    if axial_load > 0:
+        Pcr = (np.pi**2 * E * I) / ((K * L)**2)
+        buckling_ratio = axial_load / Pcr
+    else:
+        buckling_ratio = 0
+
+    max_ratio = max(stress_ratio, defl_ratio, buckling_ratio)
+
+    governing = max(
+        [("Stress", stress_ratio),
+         ("Deflection", defl_ratio),
+         ("Buckling", buckling_ratio)],
+        key=lambda x: x[1]
+    )[0]
+
+    safe = max_ratio <= 1
+
+    return {
+        "stress": stress,
+        "deflection": deflection,
+        "volume": volume,
+        "mass": mass,
+        "stress_ratio": stress_ratio,
+        "deflection_ratio": defl_ratio,
+        "buckling_ratio": buckling_ratio,
+        "max_ratio": max_ratio,
+        "governing_mode": governing,
+        "safe": safe
+    }
+
+# =================================================
+# OPTIMIZATION ENGINE
+# =================================================
+
+def optimize_beam(
+    material_name,
+    cross_section,
+    beam_type,
+    F,
+    L,
+    FOS,
+    max_deflection,
+    axial_load=0,
+    fixed=None
+):
+
+    props = MATERIALS[material_name]
+
+    E = props["E"]
+    yield_strength = props["yield"]
+    rho = props["density"]
+
+    allowable_stress = yield_strength / FOS
+
+    best = None
+    best_mass = float("inf")
+
+    fixed = fixed or {}
+
+    # ---------------- Rectangular ----------------
+    if cross_section == "Rectangular":
+
+        t_range = [fixed["t"]] if "t" in fixed else np.linspace(0.002, 0.02, 40)
+        h_range = [fixed["h"]] if "h" in fixed else np.linspace(0.03, 0.2, 40)
+
+        for t in t_range:
+            for h in h_range:
+
+                I, area = rectangular_section(t, h)
+
+                result = beam_response(
+                    I, area, h,
+                    F, L, E, rho,
+                    allowable_stress,
+                    max_deflection,
+                    beam_type,
+                    axial_load
+                )
+
+                if result and result["safe"]:
+
+                    # Push toward boundary (better than random safe point)
+                    if result["mass"] < best_mass:
+                        best_mass = result["mass"]
+                        best = {"t": t, "h": h, **result}
+
+    # ---------------- I-Beam ----------------
+    else:
+
+        h_range  = [fixed["h"]]  if "h"  in fixed else np.linspace(0.05, 0.3, 20)
+        tw_range = [fixed["tw"]] if "tw" in fixed else np.linspace(0.002, 0.02, 20)
+        tf_range = [fixed["tf"]] if "tf" in fixed else np.linspace(0.003, 0.03, 20)
+        bf_range = [fixed["bf"]] if "bf" in fixed else np.linspace(0.02, 0.3, 20)
+
+        for h in h_range:
+            for tw in tw_range:
+                for tf in tf_range:
+                    for bf in bf_range:
+
+                        I, area = ibeam_section(h, tw, tf, bf)
+
+                        result = beam_response(
+                            I, area, h,
+                            F, L, E, rho,
+                            allowable_stress,
+                            max_deflection,
+                            beam_type,
+                            axial_load
+                        )
+
+                        if result and result["safe"]:
+
+                            if result["mass"] < best_mass:
+                                best_mass = result["mass"]
+                                best = {"h": h, "tw": tw, "tf": tf, "bf": bf, **result}
+
+    return best
+
+
+
+
+
+
