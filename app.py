@@ -1,7 +1,5 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 
 st.set_page_config(page_title="AI Lightweight Optimizer", layout="wide")
