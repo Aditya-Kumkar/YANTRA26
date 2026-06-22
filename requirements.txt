@@ -1,6 +1,2 @@
-install the following python libraries using cmd "pip install command" as an Administrator 
-
-1. Numpy
-2. Streamlit 
-3. Matplotlib 
-4. scikit-learn 
+numpy
+streamlit
